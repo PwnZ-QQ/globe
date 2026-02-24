@@ -237,7 +237,7 @@ export default function Globe() {
     const canvasEl = canvasRef.current;
 
     let renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.OrthographicCamera, rayCaster: THREE.Raycaster, pointer: THREE.Vector2, controls: OrbitControls | undefined;
-    let globeGroup: THREE.Group, globeColorMesh: THREE.Mesh, globeStrokesMesh: THREE.Mesh, globeSelectionOuterMesh: THREE.Mesh, globeClickedMesh: THREE.Mesh, nightLightsMesh: THREE.Mesh;
+    let globeGroup: THREE.Group, globeColorMesh: THREE.Mesh, globeStrokesMesh: THREE.Mesh, globeSelectionOuterMesh: THREE.Mesh, globeClickedMesh: THREE.Mesh, nightLightsMesh: THREE.Mesh, graticuleMesh: THREE.Mesh;
 
     const params = {
       strokeColor: '#111111',
@@ -250,6 +250,8 @@ export default function Globe() {
       hiResScalingFactor: 8, // Increased from 4 for higher resolution
       lowResScalingFactor: 1.5,
       nightLights: false,
+      showGraticule: true,
+      graticuleColor: '#cccccc',
     };
 
     let hoveredCountryIdx = -1;
@@ -318,6 +320,11 @@ export default function Globe() {
     const clickTexture = new THREE.CanvasTexture(clickCanvas);
     clickTexture.colorSpace = THREE.SRGBColorSpace;
 
+    const graticuleCanvas = document.createElement('canvas');
+    const graticuleCtx = graticuleCanvas.getContext('2d');
+    const graticuleTexture = new THREE.CanvasTexture(graticuleCanvas);
+    graticuleTexture.colorSpace = THREE.SRGBColorSpace;
+
     function initScene() {
       renderer = new THREE.WebGLRenderer({ canvas: canvasEl, alpha: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -349,6 +356,7 @@ export default function Globe() {
       (globeStrokesMesh.material as THREE.MeshBasicMaterial).map = strokesTexture;
       (globeSelectionOuterMesh.material as THREE.MeshBasicMaterial).map = highlightTexture;
       (globeClickedMesh.material as THREE.MeshBasicMaterial).map = clickTexture;
+      (graticuleMesh.material as THREE.MeshBasicMaterial).map = graticuleTexture;
 
       prepareInitialTextures();
 
@@ -409,8 +417,9 @@ export default function Globe() {
         transparent: true,
         alphaTest: 0.5,
         side: THREE.DoubleSide,
-        roughness: 0.8,
-        metalness: 0.1,
+        roughness: 0.7,
+        metalness: 0.2,
+        bumpScale: 0.015,
       });
       const globeStrokeMaterial = new THREE.MeshBasicMaterial({
         transparent: true,
@@ -429,12 +438,22 @@ export default function Globe() {
         opacity: 0,
         blending: THREE.AdditiveBlending,
       });
+      const graticuleMaterial = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.3,
+        depthTest: false,
+      });
 
-      // Load ambient occlusion map
+      // Load ambient occlusion map and bump map
       textureLoader.load('https://unpkg.com/three-globe/example/img/earth-water.png', (texture) => {
         // Using water map as a makeshift AO/specular map for better depth
         globeColorMaterial.aoMap = texture;
         globeColorMaterial.aoMapIntensity = 0.5;
+        globeColorMaterial.needsUpdate = true;
+      });
+
+      textureLoader.load('https://unpkg.com/three-globe/example/img/earth-topology.png', (texture) => {
+        globeColorMaterial.bumpMap = texture;
         globeColorMaterial.needsUpdate = true;
       });
 
@@ -443,6 +462,7 @@ export default function Globe() {
       globeSelectionOuterMesh = new THREE.Mesh(globeGeometry, outerSelectionColorMaterial);
       globeClickedMesh = new THREE.Mesh(globeGeometry, clickedCountryMaterial);
       nightLightsMesh = new THREE.Mesh(globeGeometry, nightLightsMaterial);
+      graticuleMesh = new THREE.Mesh(globeGeometry, graticuleMaterial);
       globeClickedMesh.visible = false;
 
       // Load night lights texture
@@ -454,8 +474,9 @@ export default function Globe() {
       globeStrokesMesh.renderOrder = 2;
       globeClickedMesh.renderOrder = 3;
       nightLightsMesh.renderOrder = 1;
+      graticuleMesh.renderOrder = 1.5;
 
-      globeGroup.add(globeStrokesMesh, globeSelectionOuterMesh, globeClickedMesh, globeColorMesh, nightLightsMesh);
+      globeGroup.add(globeStrokesMesh, globeSelectionOuterMesh, globeClickedMesh, globeColorMesh, nightLightsMesh, graticuleMesh);
     }
 
     function drawMap(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D | null, scale: number, isStrokesOnly: boolean = false) {
@@ -509,12 +530,42 @@ export default function Globe() {
       texture.needsUpdate = true;
     }
 
+    function drawGraticule(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D | null, scale: number) {
+      if (!ctx) return;
+      canvas.width = svgViewBox[0] * scale;
+      canvas.height = svgViewBox[1] * scale;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.scale(scale, scale);
+      ctx.translate(0, -offsetY * svgViewBox[1]);
+      
+      ctx.strokeStyle = params.graticuleColor;
+      ctx.lineWidth = 1;
+
+      const graticule = d3.geoGraticule10();
+      const projection = d3.geoEquirectangular().fitSize([svgViewBox[0], svgViewBox[1]], { type: "Sphere" });
+      const pathGenerator = d3.geoPath().projection(projection);
+      
+      const d = pathGenerator(graticule);
+      if (d) {
+        const p = new Path2D(d);
+        ctx.stroke(p);
+      }
+      
+      ctx.restore();
+    }
+
     function prepareInitialTextures() {
       drawMap(mapCanvas, mapCtx, 1);
       mapTexture.needsUpdate = true;
 
       drawMap(strokesCanvas, strokesCtx, 1, true);
       strokesTexture.needsUpdate = true;
+
+      if (params.showGraticule) {
+        drawGraticule(graticuleCanvas, graticuleCtx, 1);
+        graticuleTexture.needsUpdate = true;
+      }
     }
 
     function prepareHiResTextures() {
@@ -523,6 +574,12 @@ export default function Globe() {
 
       drawMap(strokesCanvas, strokesCtx, params.hiResScalingFactor, true);
       strokesTexture.needsUpdate = true;
+
+      if (params.showGraticule) {
+        drawGraticule(graticuleCanvas, graticuleCtx, params.hiResScalingFactor);
+        graticuleTexture.needsUpdate = true;
+      }
+
       setCountryName(hoveredCountryIdx !== -1 ? (svgPaths[hoveredCountryIdx]?.name || '') : '');
     }
 
@@ -732,6 +789,23 @@ export default function Globe() {
           });
         })
         .name('night lights');
+      gui.add(params, 'showGraticule')
+        .onChange((value: boolean) => {
+          graticuleMesh.visible = value;
+          if (value) {
+            drawGraticule(graticuleCanvas, graticuleCtx, params.hiResScalingFactor);
+            graticuleTexture.needsUpdate = true;
+          }
+        })
+        .name('show graticule');
+      gui.addColor(params, 'graticuleColor')
+        .onChange(() => {
+          if (params.showGraticule) {
+            drawGraticule(graticuleCanvas, graticuleCtx, params.hiResScalingFactor);
+            graticuleTexture.needsUpdate = true;
+          }
+        })
+        .name('graticule color');
     }
 
     function updateMousePosition(eX: number, eY: number) {
