@@ -1,0 +1,7 @@
+{
+  "name": "Interactive 3D Globe",
+  "description": "An interactive 3D globe visualization with country highlighting and customizable parameters.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
